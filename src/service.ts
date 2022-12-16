@@ -1,29 +1,51 @@
-import {jose} from '../deps.ts';
-const env = Deno.env.toObject()
+import * as jose from "https://deno.land/x/jose/index.ts";
+import { Redis } from "https://deno.land/x/redis/mod.ts";
+import config from "./config.ts";
 
-export class TokenService{
-    private secret =  new TextEncoder().encode(env.SECRET)
+interface ITokenArgs {
+  payload: jose.JWTPayload & { owner: string; pair: string };
+  expirationTime: string | number;
+  secret: Uint8Array;
+}
 
-    constructor(){}
+export class TokenService {
+  public async GenerateToken(args: ITokenArgs) {
+    return new jose.SignJWT(args.payload)
+      .setProtectedHeader({ alg: config.tokens.protectedHeader })
+      .setIssuedAt()
+      .setIssuer(config.tokens.issuer)
+      .setAudience(config.tokens.audience)
+      .setExpirationTime(args.expirationTime)
+      .sign(args.secret);
+  }
 
-    private async generateToken(payload: jose.JWTPayload){
-        return new jose.SignJWT(payload)
-            .setProtectedHeader({ alg: env.ALG })
-            .setIssuedAt()
-            .setIssuer('tokay:issuer')
-            .setAudience('tokay:audience')
-            .setExpirationTime('2h')
-            .sign(this.secret)
-    }
+  public async VerifyToken(token: string, secret: Uint8Array) {
+    return jose.jwtVerify(token, secret, {
+      issuer: config.tokens.issuer,
+      audience: config.tokens.audience,
+    });
+  }
+}
 
-    public async GenerateTokens(){
-        // sign tokens
-    }
+export class TokenStore {
+  constructor(private readonly store: Redis) {}
 
-    public async BlackListToken(){
-    }
+  public async ExistsInStore(key: string) {
+    return this.store.get(key);
+  }
 
-    public async VerifyToken(){
+  public async ExistsInBlackList(owner: string, token: string) {
+    return this.store.sismember("BL_" + owner, token);
+  }
 
-    }
+  public async PushToStore(key: string, value: string, expirationTime: number) {
+    return this.store.set(key, value, { px: expirationTime });
+  }
+
+  public async PushToBlackList(owner: string, pairId: string, token: string) {
+    Promise.all([
+      this.store.del(owner + "_" + pairId),
+      this.store.sadd("BL_" + owner, token),
+    ]);
+  }
 }
